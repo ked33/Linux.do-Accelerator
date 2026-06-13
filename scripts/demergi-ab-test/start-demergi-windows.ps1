@@ -3,8 +3,9 @@ param(
   [string]$DemergiPath = (Join-Path $PSScriptRoot "demergi.exe"),
   [string]$PacPath = (Join-Path $PSScriptRoot "linuxdo-demergi.pac"),
   [ValidateSet("plain", "doh", "dot")]
-  [string]$DnsMode = "doh",
-  [string]$DohUrl = "https://1.0.0.1/dns-query",
+  [string]$DnsMode = "plain",
+  [string]$DohUrl = "https://223.5.5.5/dns-query",
+  [string]$DnsIpOverridesPath = (Join-Path $PSScriptRoot "linuxdo_dpi_overrides.json"),
   [int]$ClientHelloSize = 40,
   [ValidateSet("1.0", "1.1", "1.2", "1.3")]
   [string]$ClientHelloTLSv = "1.3",
@@ -38,6 +39,25 @@ function Get-ProxyEndpoint {
     Host = $Matches.host
     Port = [int]$Matches.port
   }
+}
+
+function Resolve-DnsIpOverridesPath {
+  param([string]$Path)
+
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    return ""
+  }
+
+  if (Test-Path -LiteralPath $Path) {
+    return $Path
+  }
+
+  $sourceTreePath = Join-Path (Split-Path -Parent $PSScriptRoot) (Split-Path -Leaf $Path)
+  if (Test-Path -LiteralPath $sourceTreePath) {
+    return $sourceTreePath
+  }
+
+  return $Path
 }
 
 function Test-TcpPort {
@@ -193,11 +213,15 @@ $stdoutPath = Join-Path $stateDir "demergi.stdout.log"
 $stderrPath = Join-Path $stateDir "demergi.stderr.log"
 $settingsKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 $endpoint = Get-ProxyEndpoint -Address $ProxyAddress
+$DnsIpOverridesPath = Resolve-DnsIpOverridesPath -Path $DnsIpOverridesPath
 
 if ($DryRun) {
   Write-Host "Dry run only."
   Write-Host "Demergi: $DemergiPath"
   Write-Host "PAC: $PacPath"
+  Write-Host "DNS mode: $DnsMode"
+  Write-Host "DoH URL: $DohUrl"
+  Write-Host "DNS IP overrides: $DnsIpOverridesPath"
   Write-Host "Proxy: $ProxyAddress"
   Write-Host "State: $stateDir"
   Write-Host "Manual system proxy: $([bool]$UseSystemProxy)"
@@ -222,6 +246,10 @@ if (-not (Test-Path -LiteralPath $DemergiPath)) {
 }
 if ($UseSystemPac -and -not (Test-Path -LiteralPath $PacPath)) {
   throw "PAC file not found: $PacPath"
+}
+if (-not [string]::IsNullOrWhiteSpace($DnsIpOverridesPath) -and -not (Test-Path -LiteralPath $DnsIpOverridesPath)) {
+  Write-Host "DNS IP overrides file not found, continuing without it: $DnsIpOverridesPath"
+  $DnsIpOverridesPath = ""
 }
 
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
@@ -258,6 +286,9 @@ $args = @(
 
 if ($DnsMode -eq "doh") {
   $args += @("--doh-url", $DohUrl)
+}
+if (-not [string]::IsNullOrWhiteSpace($DnsIpOverridesPath)) {
+  $args += @("--dns-ip-overrides", $DnsIpOverridesPath)
 }
 
 $process = Start-Process -FilePath $DemergiPath `

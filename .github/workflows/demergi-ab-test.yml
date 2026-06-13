@@ -71,6 +71,7 @@ jobs:
           Copy-Item -LiteralPath "scripts\demergi-ab-test\open-demergi-chrome.ps1" -Destination $out
           Copy-Item -LiteralPath "scripts\demergi-ab-test\status-demergi-windows.ps1" -Destination $out
           Copy-Item -LiteralPath "scripts\demergi-ab-test\linuxdo-demergi.pac" -Destination $out
+          Copy-Item -LiteralPath "scripts\linuxdo_dpi_overrides.json" -Destination $out
           Copy-Item -LiteralPath "scripts\demergi-ab-test\stop-demergi-silent.cmd" -Destination $out
           Copy-Item -LiteralPath "docs\demergi-ab-test.md" -Destination (Join-Path $out "readme.md")
 

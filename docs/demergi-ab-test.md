@@ -16,6 +16,7 @@
 - `open-demergi-chrome.ps1`：在 Demergi 已启动时，打开隔离 Chrome 配置目录并强制该窗口走 Demergi。
 - `status-demergi-windows.ps1`：查看 Demergi 进程、监听端口、系统代理状态和日志路径。
 - `linuxdo-demergi.pac`：PAC 文件，把 `linux.do`、`*.linux.do`、`idcflare.com`、`*.idcflare.com` 送到 `127.0.0.1:18080`，其他域名、路由器后台和内网 IP 直连。
+- `linuxdo_dpi_overrides.json`：Demergi DNS IP 覆写表，把 mihomo fake-ip 或已知污染 IP 映射到可用的 Cloudflare IP。
 
 ## 推荐：隔离 Chrome 模式
 
@@ -139,7 +140,7 @@ rules:
 
 - `linuxdo-demergi` 代理节点先存在，再引用到规则。
 - `DOMAIN-SUFFIX,linux.do,linuxdo-demergi` 放在更宽泛的 `custom-direct` / `DIRECT` / `MATCH` 规则之前。
-- `PROCESS-NAME,demergi.exe,DIRECT` 放在前面，避免 Demergi 自己的出站再被 mihomo 转回代理链。
+- `PROCESS-NAME,demergi.exe,DIRECT` 可以避免 Demergi 自己连接 Cloudflare 上游时被 mihomo 转回本地代理链。新版 Windows 脚本默认使用 `plain` DNS 并加载 `linuxdo_dpi_overrides.json`，不再依赖 Demergi 自己直连外部 DoH。
 - fake-ip / DNS 仍可按你现有 linux.do 策略处理；关键是普通 Chrome 的 HTTP CONNECT 流量要由 mihomo 转交给 `127.0.0.1:18080`。
 
 ## 状态和日志
@@ -165,17 +166,19 @@ Demergi 默认监听：
 127.0.0.1:18080
 ```
 
-默认 DoH：
+默认 DNS 模式：
 
 ```text
-https://1.0.0.1/dns-query
+plain
 ```
 
-如果你的网络访问 `1.0.0.1:443` 超时，可以改用其他 DoH：
+Windows 脚本会默认加载同目录的 `linuxdo_dpi_overrides.json`。在 mihomo fake-ip 环境下，Demergi 可能先看到 `198.18.0.0/16` fake-ip；覆写表会把这类地址和已知污染 IP 替换成可用的 Cloudflare IP 后再连接上游。
+
+如果你需要显式测试 DoH，可以切到 `doh` 模式。默认 DoH 参数使用 IP 形式，避免 DoH 服务器域名本身被错误解析：
 
 ```powershell
-.\run-demergi-chrome.ps1 -DohUrl "https://dns.alidns.com/dns-query"
-.\run-demergi-normal-chrome.ps1 -DohUrl "https://dns.alidns.com/dns-query"
+.\run-demergi-chrome.ps1 -DnsMode doh -DohUrl "https://223.5.5.5/dns-query"
+.\run-demergi-normal-chrome.ps1 -DnsMode doh -DohUrl "https://223.5.5.5/dns-query"
 ```
 
 Demergi 默认会对 HTTPS CONNECT 流量做 ClientHello 分片，默认分片大小是 `40`：
