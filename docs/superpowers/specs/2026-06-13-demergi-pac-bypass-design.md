@@ -1,41 +1,48 @@
-# Demergi PAC 与内网绕过设计
+# Demergi 与 mihomo 兼容启动设计
 
 ## 问题
 
-Demergi 普通 Chrome 模式原先会把 Windows 当前用户的手动代理改成
-`127.0.0.1:18080`。旧 bypass 列表只覆盖本机名称和回环地址，因此
-`http://192.168.10.1/ch/index.html` 这类路由器后台页面会被浏览器送进
-Demergi。
+Demergi 普通 Chrome 模式曾经把 Windows 当前用户代理改成
+`127.0.0.1:18080`，或改成本地 `linuxdo-demergi.pac`。这在没有其他代理接管系统
+代理时可用，但在 Windows + GUI.for.Clash/mihomo 环境里会和 mihomo 写同一组
+WinINet 代理设置。
 
-Demergi 是面向 linux.do 的 HTTP CONNECT 代理，不是通用全流量代理。让它接管路
-由器后台、内网页面或普通国内站点，会造成可达性和排障上的副作用。
+当前目标环境中，普通 Chrome 应继续使用 mihomo 的系统代理端口。Demergi 只作为
+本机 linux.do 专用 HTTP 代理，由 mihomo 规则把 linux.do/idcflare 相关流量转发到
+`127.0.0.1:18080`。这样不会影响路由器后台、国内网页或 mihomo 已有系统代理状态。
 
 ## 决策
 
-普通 Chrome 入口默认改为 Windows PAC 模式。随包 PAC 只把 linux.do/idcflare 相
-关域名送到 Demergi，其他流量返回 `DIRECT`。这和包的目标一致：只帮助 linux.do
-可用，不接管全部浏览器流量。
+普通 Chrome/silent 入口默认只启动 Demergi，并传 `-NoSystemProxy`。它不再修改
+Windows `ProxyServer`、`ProxyEnable` 或 `AutoConfigURL`。
 
-手动系统代理仍保留为显式调试模式。使用该模式时，脚本需要绕过常见私网和
-link-local 地址段，避免路由器后台和局域网服务进入 Demergi。
+如果旧版本留下 `linuxdo-demergi.pac`，默认启动路径只清理这个 Demergi 自己写入的
+PAC 项，不改 mihomo 的 `ProxyServer=127.0.0.1:20122` 等代理端口。
 
-隔离 Chrome 入口使用显式 `--proxy-server`，因此也需要传入浏览器级
-`--proxy-bypass-list`。
+`-UseSystemProxy` 和 `-UseSystemPac` 仍保留为显式备用/排障模式，并用 marker 文件
+标记“当前代理状态由 Demergi 管理”。停止脚本只有看到 marker 时才恢复 Demergi
+保存的代理备份，避免误把 mihomo 代理状态回滚到旧快照。
+
+GUI.for.Clash 覆写脚本负责持久化 mihomo 侧分流：新增本地 HTTP 代理节点
+`linuxdo-demergi`，把 `linux.do` 和 `idcflare.com` 规则前置到该节点，并让
+`demergi.exe` 出站 `DIRECT`。
 
 ## 范围
 
-- `run-demergi-normal-chrome.ps1` 默认启动 PAC 模式。
+- `run-demergi-normal-chrome.ps1` 默认只启动 Demergi，不改 Windows 代理。
+- `start-demergi-windows.ps1` 默认清理旧 Demergi PAC 残留，但不改 mihomo 的手动
+  系统代理端口。
 - `start-demergi-windows.ps1 -UseSystemProxy` 继续可用，但增加内网 bypass 列表和
   风险提示。
-- 进入 PAC 模式时清理当前注册表里的手动代理字段，同时保留启动前备份用于停止时
-  恢复。
-- 成功恢复代理设置后删除备份文件，避免后续运行复用过期设置。
+- `start-demergi-windows.ps1 -UseSystemPac` 继续可用，但只作为显式备用模式。
+- `stop-demergi-windows.ps1` 只在存在 Demergi 管理 marker 时恢复代理备份。
 - `open-demergi-chrome.ps1` 增加 `--proxy-bypass-list`。
-- PAC 文件显式标注 localhost、私网 IP 字面量和 link-local 地址直连。
-- 文档说明普通 Chrome 默认 PAC，手动系统代理只是影响更广的备用调试模式。
+- GUI.for.Clash `profiles.yaml` 中用户授权的 `onGenerate` 脚本加入
+  `linuxdo-demergi` 本地 HTTP 节点、前置规则和 fake-ip-filter 例外。
+- 文档说明普通 Chrome 的推荐路径是 mihomo 规则转发，而不是 Demergi 抢系统代理。
 
 ## 验证
 
-使用脚本 DryRun、PowerShell 解析检查、PAC 语法检查和 diff 检查。这里属于脚本/
-静态验证；是否符合真实浏览器行为，需要打包后在 Windows + Chrome 环境中实际运
-行确认。
+使用脚本 DryRun、PowerShell 解析检查、PAC 语法检查、GUI.for.Clash 覆写脚本
+Node 模拟和 diff 检查。这里属于脚本/静态验证；是否符合真实浏览器行为，需要在
+GUI.for.Clash 重新生成配置并让 mihomo 重新加载后确认。

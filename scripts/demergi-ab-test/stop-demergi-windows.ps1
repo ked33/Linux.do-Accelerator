@@ -29,7 +29,16 @@ public static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntP
 }
 
 function Restore-ProxySettings {
-  param([string]$BackupPath)
+  param(
+    [string]$BackupPath,
+    [string]$ManagedFlagPath
+  )
+
+  if (-not (Test-Path -LiteralPath $ManagedFlagPath)) {
+    Write-Host "No current Demergi-managed Windows proxy state was found."
+    Write-Host "Windows proxy settings were not changed."
+    return
+  }
 
   if (-not (Test-Path -LiteralPath $BackupPath)) {
     Write-Host "No proxy settings backup found: $BackupPath"
@@ -57,6 +66,7 @@ function Restore-ProxySettings {
 
   Invoke-InternetSettingsRefresh
   Remove-Item -LiteralPath $BackupPath -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $ManagedFlagPath -Force -ErrorAction SilentlyContinue
   Write-Host "System proxy settings restored."
   Write-Host "Proxy settings backup cleared."
 }
@@ -64,12 +74,14 @@ function Restore-ProxySettings {
 $stateDir = Get-StateDir
 $pidPath = Join-Path $stateDir "demergi.pid"
 $backupPath = Join-Path $stateDir "proxy-settings-backup.json"
+$managedProxyFlagPath = Join-Path $stateDir "system-proxy-managed.flag"
 
 if ($DryRun) {
   Write-Host "Dry run only."
   Write-Host "State: $stateDir"
   Write-Host "PID file: $pidPath"
   Write-Host "Backup: $backupPath"
+  Write-Host "Managed proxy marker: $managedProxyFlagPath"
   exit 0
 }
 
@@ -93,7 +105,8 @@ if (Test-Path -LiteralPath $pidPath) {
 }
 
 if (-not $NoSystemProxy) {
-  Restore-ProxySettings -BackupPath $backupPath
+  Restore-ProxySettings -BackupPath $backupPath -ManagedFlagPath $managedProxyFlagPath
 } else {
+  Remove-Item -LiteralPath $managedProxyFlagPath -Force -ErrorAction SilentlyContinue
   Write-Host "System proxy settings were not changed."
 }

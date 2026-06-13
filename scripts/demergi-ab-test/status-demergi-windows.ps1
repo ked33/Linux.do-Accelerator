@@ -30,10 +30,12 @@ $stateDir = Get-StateDir
 $pidPath = Join-Path $stateDir "demergi.pid"
 $stdoutPath = Join-Path $stateDir "demergi.stdout.log"
 $stderrPath = Join-Path $stateDir "demergi.stderr.log"
+$managedProxyFlagPath = Join-Path $stateDir "system-proxy-managed.flag"
 $endpoint = Get-ProxyEndpoint -Address $ProxyAddress
 
 Write-Host "State directory: $stateDir"
 Write-Host "PID file: $pidPath"
+Write-Host "Managed proxy marker: $managedProxyFlagPath"
 
 $demergiPid = $null
 if (Test-Path -LiteralPath $pidPath) {
@@ -81,9 +83,25 @@ Get-NetTCPConnection -LocalAddress $endpoint.Host -LocalPort $endpoint.Port -Err
 Write-Host ""
 Write-Host "Windows user proxy settings:"
 $settingsKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-Get-ItemProperty -Path $settingsKey -Name AutoConfigURL,ProxyEnable,ProxyServer,ProxyOverride,AutoDetect -ErrorAction SilentlyContinue |
+$proxySettings = Get-ItemProperty -Path $settingsKey -Name AutoConfigURL,ProxyEnable,ProxyServer,ProxyOverride,AutoDetect -ErrorAction SilentlyContinue
+$proxySettings |
   Select-Object AutoConfigURL,ProxyEnable,ProxyServer,ProxyOverride,AutoDetect |
   Format-List
+
+if ($proxySettings) {
+  $autoConfigUrl = [string]$proxySettings.AutoConfigURL
+  $proxyServer = [string]$proxySettings.ProxyServer
+  if ($autoConfigUrl -match "(?i)linuxdo-demergi\.pac" -and $proxyServer -and $proxyServer -ne $ProxyAddress) {
+    Write-Host "Warning: Demergi PAC is present while Windows manual proxy points to $proxyServer."
+    Write-Host "Ordinary Chrome may still follow the manual proxy. Use mihomo rules to route linux.do to $ProxyAddress, or clear the stale PAC by running start-demergi-windows.ps1 without -UseSystemPac."
+  }
+}
+
+if (Test-Path -LiteralPath $managedProxyFlagPath) {
+  Write-Host ""
+  Write-Host "Demergi-managed Windows proxy mode:"
+  Get-Content -LiteralPath $managedProxyFlagPath -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 
 Write-Host ""
 Write-Host "Logs:"

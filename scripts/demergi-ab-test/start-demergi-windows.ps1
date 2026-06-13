@@ -143,6 +143,34 @@ function Remove-PropertyIfExists {
   Remove-ItemProperty -Path $Path -Name $Name -Force -ErrorAction SilentlyContinue
 }
 
+function Test-DemergiPacUrl {
+  param([string]$Value)
+
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    return $false
+  }
+
+  return $Value -match "(?i)(^file:///.*linuxdo-demergi\.pac$|linuxdo-demergi\.pac$)"
+}
+
+function Clear-DemergiPacIfPresent {
+  param([string]$KeyPath)
+
+  try {
+    $item = Get-ItemProperty -Path $KeyPath -Name "AutoConfigURL" -ErrorAction Stop
+  } catch {
+    return $false
+  }
+
+  $autoConfigUrl = [string]$item.AutoConfigURL
+  if (-not (Test-DemergiPacUrl -Value $autoConfigUrl)) {
+    return $false
+  }
+
+  Remove-PropertyIfExists -Path $KeyPath -Name "AutoConfigURL"
+  return $true
+}
+
 function Get-SystemProxyBypassList {
   $private172 = 16..31 | ForEach-Object { "172.$_.*" }
   @(
@@ -160,6 +188,7 @@ function Get-SystemProxyBypassList {
 $stateDir = Get-StateDir
 $pidPath = Join-Path $stateDir "demergi.pid"
 $backupPath = Join-Path $stateDir "proxy-settings-backup.json"
+$managedProxyFlagPath = Join-Path $stateDir "system-proxy-managed.flag"
 $stdoutPath = Join-Path $stateDir "demergi.stdout.log"
 $stderrPath = Join-Path $stateDir "demergi.stderr.log"
 $settingsKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
@@ -173,6 +202,10 @@ if ($DryRun) {
   Write-Host "State: $stateDir"
   Write-Host "Manual system proxy: $([bool]$UseSystemProxy)"
   Write-Host "System PAC: $([bool]$UseSystemPac)"
+  if (-not $UseSystemProxy -and -not $UseSystemPac) {
+    Write-Host "Windows proxy mode: unchanged"
+    Write-Host "Stale Demergi PAC cleanup: enabled"
+  }
   if ($UseSystemProxy) {
     Write-Host "Manual proxy bypass: $((Get-SystemProxyBypassList) -join ';')"
   }
@@ -254,6 +287,10 @@ if (-not $ready) {
 }
 
 if ($UseSystemProxy) {
+  if ((-not (Test-Path -LiteralPath $managedProxyFlagPath)) -and (Test-Path -LiteralPath $backupPath)) {
+    Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+    Write-Host "Removed stale Demergi proxy settings backup."
+  }
   Save-ProxySettings -BackupPath $backupPath -KeyPath $settingsKey
   Remove-PropertyIfExists -Path $settingsKey -Name "AutoConfigURL"
   Set-StringProperty -Path $settingsKey -Name "ProxyServer" -Value $ProxyAddress
@@ -261,11 +298,16 @@ if ($UseSystemProxy) {
   Set-DWordProperty -Path $settingsKey -Name "ProxyEnable" -Value 1
   Set-DWordProperty -Path $settingsKey -Name "AutoDetect" -Value 0
   Invoke-InternetSettingsRefresh
+  Set-Content -LiteralPath $managedProxyFlagPath -Value "manual" -Encoding ASCII
   Write-Host "System manual proxy enabled: $ProxyAddress"
   Write-Host "LAN/private IP ranges are bypassed, but non-linux.do web traffic may still use Demergi."
   Write-Host "For normal use, prefer PAC mode: .\start-demergi-windows.ps1 -UseSystemPac -Restart"
   Write-Host "Ordinary Chrome should now use Demergi. If it does not, restart Chrome."
 } elseif ($UseSystemPac) {
+  if ((-not (Test-Path -LiteralPath $managedProxyFlagPath)) -and (Test-Path -LiteralPath $backupPath)) {
+    Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+    Write-Host "Removed stale Demergi proxy settings backup."
+  }
   Save-ProxySettings -BackupPath $backupPath -KeyPath $settingsKey
   $pacUri = ([System.Uri]((Resolve-Path -LiteralPath $PacPath).Path)).AbsoluteUri
   Remove-PropertyIfExists -Path $settingsKey -Name "ProxyServer"
@@ -274,11 +316,19 @@ if ($UseSystemProxy) {
   Set-DWordProperty -Path $settingsKey -Name "ProxyEnable" -Value 0
   Set-DWordProperty -Path $settingsKey -Name "AutoDetect" -Value 0
   Invoke-InternetSettingsRefresh
+  Set-Content -LiteralPath $managedProxyFlagPath -Value "pac" -Encoding ASCII
   Write-Host "System PAC enabled: $pacUri"
   Write-Host "Only linux.do/idcflare domains are routed to Demergi; other traffic stays DIRECT."
 } else {
-  Write-Host "System proxy settings were not changed."
+  $clearedPac = Clear-DemergiPacIfPresent -KeyPath $settingsKey
+  Remove-Item -LiteralPath $managedProxyFlagPath -Force -ErrorAction SilentlyContinue
+  if ($clearedPac) {
+    Invoke-InternetSettingsRefresh
+    Write-Host "Cleared stale Demergi PAC from Windows proxy settings."
+  }
+  Write-Host "Windows proxy target was not changed."
   Write-Host "Open linux.do with: .\open-demergi-chrome.ps1"
+  Write-Host "For ordinary Chrome behind mihomo, route linux.do/idcflare domains to $ProxyAddress in mihomo."
 }
 
 Write-Host "Demergi started on $ProxyAddress with PID $($process.Id)."

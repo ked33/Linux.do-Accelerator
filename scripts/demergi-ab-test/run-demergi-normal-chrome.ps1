@@ -25,7 +25,7 @@ $startArgs = @{
   ClientHelloSize = $ClientHelloSize
   ClientHelloTLSv = $ClientHelloTLSv
   LogLevel = $LogLevel
-  UseSystemPac = $true
+  NoSystemProxy = $true
   Restart = $true
 }
 
@@ -33,7 +33,8 @@ if ($DryRun) {
   Write-Host "Dry run only."
   Write-Host "Start script: $startScript"
   Write-Host "Proxy: $ProxyAddress"
-  Write-Host "Windows proxy mode: PAC, only linux.do/idcflare domains use Demergi"
+  Write-Host "Windows proxy mode: unchanged"
+  Write-Host "mihomo-compatible mode: route linux.do to $ProxyAddress in mihomo if ordinary Chrome should use Demergi."
   Write-Host "DNS mode: $DnsMode"
   Write-Host "DoH URL: $DohUrl"
   Write-Host "ClientHello size: $ClientHelloSize"
@@ -43,6 +44,6 @@ if ($DryRun) {
 }
 
 & $startScript @startArgs
-Write-Host "Windows PAC proxy is enabled for the current user."
-Write-Host "Only linux.do/idcflare domains are routed to Demergi; other sites stay DIRECT."
-Write-Host "Open https://linux.do/ manually in ordinary Chrome. Restart Chrome if it still uses the old proxy state."
+Write-Host "Demergi is running on $ProxyAddress."
+Write-Host "Windows proxy settings were not changed."
+Write-Host "For ordinary Chrome behind mihomo, route linux.do/idcflare domains to this local HTTP proxy in mihomo."

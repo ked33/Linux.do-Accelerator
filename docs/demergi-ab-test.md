@@ -6,12 +6,12 @@
 
 - `demergi.exe`：从随仓库打包的 Demergi 源码构建出的本机代理程序。
 - `run-demergi-chrome.ps1`：启动 Demergi，并打开一个隔离 Chrome 配置目录访问 linux.do。
-- `run-demergi-normal-chrome.ps1`：启动 Demergi，并启用 Windows 当前用户 PAC；普通 Chrome 需要手动打开 linux.do。
+- `run-demergi-normal-chrome.ps1`：启动 Demergi，不修改 Windows 当前用户系统代理；普通 Chrome 是否使用 Demergi 由现有系统代理或 mihomo 规则决定。
 - `run-demergi-normal-chrome-silent.exe`：静默启动普通 Chrome 模式，适合双击运行；不会自动打开页面。
 - `run-demergi-normal-chrome-silent.cmd`：普通 Chrome 模式的备用双击入口；如果 `.exe` 被安全软件拦截，可以改用它，但可能出现短暂窗口。
 - `start-demergi-windows.ps1`：只启动 Demergi。默认不修改系统代理。
-- `stop-demergi-windows.ps1`：停止 Demergi，并在需要时恢复之前保存的 Windows 代理设置。
-- `stop-demergi-silent.exe`：静默停止 Demergi，并恢复之前保存的 Windows 代理设置。
+- `stop-demergi-windows.ps1`：停止 Demergi；只有显式用 `-UseSystemProxy` 或 `-UseSystemPac` 启动过时，才恢复 Demergi 保存的 Windows 代理设置。
+- `stop-demergi-silent.exe`：静默停止 Demergi；只有存在当前 Demergi 管理标记时才恢复代理。
 - `stop-demergi-silent.cmd`：停止并恢复代理的备用双击入口；如果 `.exe` 被安全软件拦截，可以改用它，但可能出现短暂窗口。
 - `open-demergi-chrome.ps1`：在 Demergi 已启动时，打开隔离 Chrome 配置目录并强制该窗口走 Demergi。
 - `status-demergi-windows.ps1`：查看 Demergi 进程、监听端口、系统代理状态和日志路径。
@@ -53,27 +53,27 @@ run-demergi-normal-chrome-silent.exe
 run-demergi-normal-chrome-silent.cmd
 ```
 
-这个脚本只会启动 Demergi 并启用 Windows 当前用户 PAC。默认 PAC 只让 `linux.do`、`*.linux.do`、`idcflare.com`、`*.idcflare.com` 走 Demergi：
+这个脚本只会启动 Demergi，不会修改 Windows 当前用户的 `ProxyServer`、`ProxyEnable` 或 `AutoConfigURL`。如果检测到旧版本留下的 `linuxdo-demergi.pac`，会只清理这个 Demergi PAC 项，不会改动 mihomo 的 `127.0.0.1:20122` 等系统代理端口。
+
+普通 Chrome 如果已经由 mihomo 接管系统代理，需要在 mihomo 中把 linux.do/idcflare 相关域名转发到本地 Demergi HTTP 代理：
 
 ```text
-PROXY 127.0.0.1:18080
+127.0.0.1:18080
 ```
 
-其他网站、路由器后台和内网 IP 会保持直连，因此不会把 `http://192.168.10.1/` 这类页面送进 Demergi。
-
-脚本不会自动打开 `linux.do` 页面。运行后请在普通 Chrome 中手动打开：
+脚本不会自动打开 `linux.do` 页面。完成 mihomo 分流后，请在普通 Chrome 中手动打开：
 
 ```text
 https://linux.do/
 ```
 
-如果普通 Chrome 已经打开但仍未生效，关闭并重新打开 Chrome，或执行：
+如果普通 Chrome 已经打开但仍未生效，先确认 mihomo 已重新加载配置。必要时关闭并重新打开 Chrome，或执行：
 
 ```powershell
 taskkill /IM chrome.exe /F
 ```
 
-使用完普通 Chrome 模式后，停止并恢复之前的 Windows 代理设置：
+使用完普通 Chrome 模式后，停止 Demergi：
 
 ```powershell
 .\stop-demergi-windows.ps1
@@ -112,6 +112,35 @@ stop-demergi-silent.cmd
 ```powershell
 .\start-demergi-windows.ps1 -UseSystemPac -Restart
 ```
+
+在 mihomo 已经管理 Windows 系统代理的环境中，不推荐使用 `-UseSystemProxy` 或 `-UseSystemPac`，因为它们会和 mihomo 写同一组 Windows 当前用户代理设置。推荐保持 Windows 系统代理归 mihomo 管理，只让 mihomo 把 linux.do/idcflare 转发到本地 Demergi。
+
+## mihomo 配置文本
+
+本包不会修改 mihomo 或 GUI.for.Clash 的任何配置文件。下面只是配置思路文本，需要你放到自己的持久化覆写脚本或规则生成逻辑里。
+
+概念上的 mihomo 片段：
+
+```yaml
+proxies:
+  - name: linuxdo-demergi
+    type: http
+    server: 127.0.0.1
+    port: 18080
+
+rules:
+  - PROCESS-NAME,demergi.exe,DIRECT
+  - PROCESS-NAME,linuxdo-accelerator.exe,DIRECT
+  - DOMAIN-SUFFIX,linux.do,linuxdo-demergi
+  - DOMAIN-SUFFIX,idcflare.com,linuxdo-demergi
+```
+
+在 GUI.for.Clash 这类生成配置的工具里，不建议只改生成后的 `config.yaml`。应放到持久化的生成脚本/覆写逻辑中，并保证：
+
+- `linuxdo-demergi` 代理节点先存在，再引用到规则。
+- `DOMAIN-SUFFIX,linux.do,linuxdo-demergi` 放在更宽泛的 `custom-direct` / `DIRECT` / `MATCH` 规则之前。
+- `PROCESS-NAME,demergi.exe,DIRECT` 放在前面，避免 Demergi 自己的出站再被 mihomo 转回代理链。
+- fake-ip / DNS 仍可按你现有 linux.do 策略处理；关键是普通 Chrome 的 HTTP CONNECT 流量要由 mihomo 转交给 `127.0.0.1:18080`。
 
 ## 状态和日志
 
@@ -159,5 +188,5 @@ Demergi 默认会对 HTTPS CONNECT 流量做 ClientHello 分片，默认分片�
 
 - 不要同时运行原 Linux.do Accelerator 的 GUI/CLI 代理核心和 Demergi 测试包，否则 CPU 和连通性判断会互相干扰。
 - `run-demergi-chrome.ps1` 使用隔离 Chrome 配置目录，是最稳的测试和使用方式。
-- `run-demergi-normal-chrome.ps1` 会改 Windows 当前用户的 PAC 设置，普通 Chrome 和部分跟随系统代理的应用会按 PAC 规则只把 linux.do/idcflare 相关域名送进 Demergi。
-- 使用普通 Chrome 模式后，建议用 `.\stop-demergi-windows.ps1` 恢复之前的代理设置。
+- `run-demergi-normal-chrome.ps1` 默认不改 Windows 代理设置，适合 mihomo 已管理系统代理的环境。
+- 显式 `-UseSystemProxy` / `-UseSystemPac` 只是无 mihomo 或排障时的备用模式；在 mihomo 环境中优先使用 mihomo 规则转发到 Demergi。
