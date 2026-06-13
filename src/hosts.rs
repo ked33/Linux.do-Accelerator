@@ -55,6 +55,21 @@ pub fn hosts_are_applied(config: &AppConfig) -> Result<bool> {
     }
 }
 
+pub fn hosts_have_managed_block() -> Result<bool> {
+    #[cfg(target_os = "android")]
+    {
+        return Ok(false);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let path = hosts_path();
+        let original = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read hosts file {}", path.display()))?;
+        Ok(original.contains(START_MARKER) && original.contains(END_MARKER))
+    }
+}
+
 pub fn remove_hosts(_paths: &AppPaths) -> Result<()> {
     #[cfg(target_os = "android")]
     {

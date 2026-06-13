@@ -13,8 +13,8 @@ use tokio::sync::watch;
 use crate::certs::{ensure_bundle, load_bundle};
 use crate::config::AppConfig;
 use crate::hosts::{
-    apply_hosts, backup_hosts_file, remove_hosts, restore_hosts_file,
-    validate_hosts_backup_file,
+    apply_hosts, backup_hosts_file, hosts_are_applied, hosts_have_managed_block, remove_hosts,
+    restore_hosts_file, validate_hosts_backup_file,
 };
 use crate::hosts_store::{BackupState, backup_state, clear_hosts_backup};
 use crate::paths::AppPaths;
@@ -28,6 +28,8 @@ use crate::runtime_log;
 use crate::state;
 #[cfg(unix)]
 use crate::helper_ipc::HelperResponse;
+
+const STALE_HOSTS_STATUS: &str = "hosts 已接管但服务未运行";
 
 pub fn resolve_paths(config_override: Option<PathBuf>) -> Result<AppPaths> {
     let paths = AppPaths::resolve(config_override)?;
@@ -132,6 +134,11 @@ pub async fn run_foreground(config_path: Option<PathBuf>, with_setup: bool) -> R
         }
         Err(error) => {
             log_error(&paths, "daemon", &format!("{error:#}"));
+            if with_setup {
+                let _ = remove_hosts(&paths);
+                let _ = remove_loopback_alias(&config);
+                let _ = flush_dns_cache();
+            }
             let _ = state::mark_error(&paths, &error.to_string());
         }
     }
@@ -159,8 +166,6 @@ pub fn helper_start(config_path: Option<PathBuf>) -> Result<()> {
             stop_running_daemon(&paths, &config)?;
         }
 
-        apply_hosts(&config, &paths)?;
-        let _ = flush_dns_cache();
         state::mark_starting(&paths)?;
 
         let cli_binary = current_cli_binary()?;
@@ -173,6 +178,8 @@ pub fn helper_start(config_path: Option<PathBuf>) -> Result<()> {
         state::write_pid(&paths, child_pid)?;
 
         wait_until_running(&paths, &config, Duration::from_secs(10))?;
+        apply_hosts(&config, &paths)?;
+        let _ = flush_dns_cache();
         thread::sleep(Duration::from_millis(800));
         let current = reconcile_running_state(&paths, &config)?;
         if !current.running {
@@ -193,6 +200,7 @@ pub fn helper_start(config_path: Option<PathBuf>) -> Result<()> {
             if reconcile_running_state(&paths, &config)
                 .map(|state| state.running)
                 .unwrap_or(false)
+                && hosts_are_applied(&config).unwrap_or(false)
             {
                 log_warn(
                     &paths,
@@ -202,6 +210,7 @@ pub fn helper_start(config_path: Option<PathBuf>) -> Result<()> {
                 return Ok(());
             }
 
+            let _ = terminate_running_service(&paths);
             let _ = remove_hosts(&paths);
             let _ = remove_loopback_alias(&config);
             let _ = state::clear_pid(&paths);
@@ -302,6 +311,26 @@ struct ProxyHandle {
 }
 
 #[cfg(unix)]
+fn stop_helper_proxy(proxy_state: &Arc<Mutex<Option<ProxyHandle>>>, timeout: Duration) {
+    let handle = {
+        let mut state = proxy_state.lock().unwrap();
+        state.take()
+    };
+
+    if let Some(handle) = handle {
+        let _ = handle.shutdown_tx.send(true);
+        let start = Instant::now();
+        while !handle.join.is_finished() {
+            if start.elapsed() > timeout {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        let _ = handle.join.join();
+    }
+}
+
+#[cfg(unix)]
 fn handle_helper_start(
     config_path: &std::path::Path,
     proxy_state: &Arc<Mutex<Option<ProxyHandle>>>,
@@ -309,13 +338,7 @@ fn handle_helper_start(
     let config_path = config_path.to_path_buf();
 
     // If proxy is already running, stop it first.
-    {
-        let mut state = proxy_state.lock().unwrap();
-        if let Some(handle) = state.take() {
-            let _ = handle.shutdown_tx.send(true);
-            let _ = handle.join.join();
-        }
-    }
+    stop_helper_proxy(proxy_state, Duration::from_secs(10));
 
     let result = (|| -> Result<()> {
         eprintln!("handle_helper_start: config={}", config_path.display());
@@ -330,10 +353,6 @@ fn handle_helper_start(
 
         let bundle = ensure_bundle(&config, &paths.cert_dir).context("ensure_bundle failed")?;
         eprintln!("handle_helper_start: bundle ok");
-
-        apply_hosts(&config, &paths).context("apply_hosts failed")?;
-        eprintln!("handle_helper_start: hosts ok");
-        let _ = flush_dns_cache();
 
         let pid = std::process::id();
         state::write_pid(&paths, pid)?;
@@ -368,6 +387,12 @@ fn handle_helper_start(
             join,
         });
 
+        wait_until_running(&paths, &config, Duration::from_secs(10))
+            .context("proxy did not become ready")?;
+        apply_hosts(&config, &paths).context("apply_hosts failed")?;
+        eprintln!("handle_helper_start: hosts ok");
+        let _ = flush_dns_cache();
+
         Ok(())
     })();
 
@@ -377,11 +402,23 @@ fn handle_helper_start(
             message: "加速服务已启动".to_string(),
             status: None,
         },
-        Err(e) => HelperResponse {
-            success: false,
-            message: format!("{e:#}"),
-            status: None,
-        },
+        Err(e) => {
+            stop_helper_proxy(proxy_state, Duration::from_secs(5));
+            if let Ok(paths) = resolve_paths(Some(config_path.clone())) {
+                if let Ok(config) = AppConfig::load_or_create(&paths.config_path) {
+                    let _ = remove_hosts(&paths);
+                    let _ = remove_loopback_alias(&config);
+                    let _ = flush_dns_cache();
+                }
+                let _ = state::clear_pid(&paths);
+                let _ = state::mark_error(&paths, &format!("{e:#}"));
+            }
+            HelperResponse {
+                success: false,
+                message: format!("{e:#}"),
+                status: None,
+            }
+        }
     }
 }
 
@@ -398,22 +435,7 @@ fn handle_helper_stop(
         let config = AppConfig::load_or_create(&paths.config_path)?;
 
         // Signal proxy to shut down.
-        let handle = {
-            let mut state = proxy_state.lock().unwrap();
-            state.take()
-        };
-
-        if let Some(handle) = handle {
-            let _ = handle.shutdown_tx.send(true);
-            // Wait for proxy thread to finish (with timeout).
-            let start = std::time::Instant::now();
-            while !handle.join.is_finished() {
-                if start.elapsed() > std::time::Duration::from_secs(10) {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
+        stop_helper_proxy(proxy_state, Duration::from_secs(10));
 
         // Clean up hosts, loopback, etc.
         let _ = restore_hosts_after_stop(&paths);
@@ -635,6 +657,32 @@ fn reconcile_running_state(paths: &AppPaths, config: &AppConfig) -> Result<state
         return Ok(repaired);
     }
 
+    if hosts_have_managed_block().unwrap_or(false) {
+        let status_text = STALE_HOSTS_STATUS.to_string();
+        let last_error = Some(format!(
+            "检测到 hosts 仍指向本地加速器，但 {}:{} 和 {}:{} 未监听；请重新启动加速或执行 cleanup 恢复 hosts。",
+            config.listen_host, config.http_port, config.listen_host, config.https_port
+        ));
+
+        if !current.running
+            && current.pid.is_none()
+            && current.status_text == status_text
+            && current.last_error == last_error
+        {
+            return Ok(current);
+        }
+
+        let stale = state::ServiceState {
+            running: false,
+            pid: None,
+            status_text,
+            last_error,
+            updated_at: now_ts(),
+        };
+        state::write(paths, &stale)?;
+        return Ok(stale);
+    }
+
     Ok(current)
 }
 
@@ -642,10 +690,14 @@ fn wait_until_running(paths: &AppPaths, config: &AppConfig, timeout: Duration) -
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         let state = reconcile_running_state(paths, config)?;
-        if state.running {
+        if state.running && proxy_ports_ready(config) {
             return Ok(());
         }
         if let Some(error) = state.last_error {
+            if state.status_text == STALE_HOSTS_STATUS {
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            }
             bail!(error);
         }
         thread::sleep(Duration::from_millis(250));
