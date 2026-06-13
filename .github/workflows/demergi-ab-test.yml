@@ -1,0 +1,107 @@
+name: Demergi Windows Direct Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/demergi-ab-test.yml"
+      - "docs/demergi-ab-test.md"
+      - "scripts/demergi-ab-test/**"
+      - "scripts/linux_do_stable_full.tar.gz"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demergi-ab-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    name: Build Windows x64 Demergi package
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Extract Demergi source package
+        shell: bash
+        run: |
+          rm -rf .demergi-work
+          mkdir -p .demergi-work
+          tar -xzf scripts/linux_do_stable_full.tar.gz -C .demergi-work
+
+      - name: Build Demergi Windows binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $demergiDir = Join-Path $PWD ".demergi-work\linux_do_proxy\demergi"
+          Push-Location $demergiDir
+          npm install --no-audit --no-fund --package-lock=false
+          npm run build:bundle
+          npx --no-install pkg --target node20-win-x64 --out-path ./dist/ ./dist/demergi.js
+          Pop-Location
+          Get-ChildItem -Path (Join-Path $demergiDir "dist") -Force
+
+      - name: Prepare direct-use artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = Join-Path $PWD "dist\demergi-direct"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          $demergiDist = Join-Path $PWD ".demergi-work\linux_do_proxy\demergi\dist"
+          $demergiExe = Get-ChildItem -Path $demergiDist -Filter "*.exe" -File | Select-Object -First 1
+          if (-not $demergiExe) {
+            throw "Demergi Windows executable was not produced under $demergiDist"
+          }
+          Copy-Item -LiteralPath $demergiExe.FullName -Destination (Join-Path $out "demergi.exe")
+
+          Copy-Item -LiteralPath "scripts\demergi-ab-test\start-demergi-windows.ps1" -Destination $out
+          Copy-Item -LiteralPath "scripts\demergi-ab-test\stop-demergi-windows.ps1" -Destination $out
+          Copy-Item -LiteralPath "scripts\demergi-ab-test\run-demergi-chrome.ps1" -Destination $out
+          Copy-Item -LiteralPath "scripts\demergi-ab-test\run-demergi-normal-chrome.ps1" -Destination $out
+          Copy-Item -LiteralPath "scripts\demergi-ab-test\run-demergi-normal-chrome-silent.cmd" -Destination $out
+          Copy-Item -LiteralPath "scripts\demergi-ab-test\open-demergi-chrome.ps1" -Destination $out
+          Copy-Item -LiteralPath "scripts\demergi-ab-test\status-demergi-windows.ps1" -Destination $out
+          Copy-Item -LiteralPath "scripts\demergi-ab-test\linuxdo-demergi.pac" -Destination $out
+          Copy-Item -LiteralPath "scripts\demergi-ab-test\stop-demergi-silent.cmd" -Destination $out
+          Copy-Item -LiteralPath "docs\demergi-ab-test.md" -Destination (Join-Path $out "readme.md")
+
+          $cscCandidates = @(
+            "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
+            "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+          )
+          $csc = $cscCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $csc) {
+            throw "The .NET Framework C# compiler csc.exe was not found."
+          }
+          $launcherSource = Join-Path $PWD "scripts\demergi-ab-test\DemergiSilentLauncher.cs"
+          $startLauncher = Join-Path $out "run-demergi-normal-chrome-silent.exe"
+          $stopLauncher = Join-Path $out "stop-demergi-silent.exe"
+          & $csc /nologo /target:winexe /optimize+ /platform:anycpu "/out:$startLauncher" $launcherSource
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to compile Demergi silent launcher."
+          }
+          Copy-Item -LiteralPath $startLauncher -Destination $stopLauncher
+
+          @(
+            "Linux.do Demergi direct-use package"
+            "Repository: $env:GITHUB_REPOSITORY"
+            "Branch: $env:GITHUB_REF_NAME"
+            "Commit: $env:GITHUB_SHA"
+            "Run: $env:GITHUB_RUN_ID"
+            "Built at: $((Get-Date).ToUniversalTime().ToString('u'))"
+          ) | Set-Content -Path (Join-Path $out "BUILD-INFO.txt") -Encoding ASCII
+
+      - name: Upload direct-use artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxdo-demergi-direct-windows-x64-${{ github.run_number }}
+          path: dist/demergi-direct/**
