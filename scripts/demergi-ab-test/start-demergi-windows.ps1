@@ -143,6 +143,20 @@ function Remove-PropertyIfExists {
   Remove-ItemProperty -Path $Path -Name $Name -Force -ErrorAction SilentlyContinue
 }
 
+function Get-SystemProxyBypassList {
+  $private172 = 16..31 | ForEach-Object { "172.$_.*" }
+  @(
+    "<local>",
+    "localhost",
+    "127.*",
+    "[::1]",
+    "10.*",
+    $private172,
+    "192.168.*",
+    "169.254.*"
+  ) | ForEach-Object { $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+}
+
 $stateDir = Get-StateDir
 $pidPath = Join-Path $stateDir "demergi.pid"
 $backupPath = Join-Path $stateDir "proxy-settings-backup.json"
@@ -159,6 +173,9 @@ if ($DryRun) {
   Write-Host "State: $stateDir"
   Write-Host "Manual system proxy: $([bool]$UseSystemProxy)"
   Write-Host "System PAC: $([bool]$UseSystemPac)"
+  if ($UseSystemProxy) {
+    Write-Host "Manual proxy bypass: $((Get-SystemProxyBypassList) -join ';')"
+  }
   exit 0
 }
 
@@ -240,20 +257,25 @@ if ($UseSystemProxy) {
   Save-ProxySettings -BackupPath $backupPath -KeyPath $settingsKey
   Remove-PropertyIfExists -Path $settingsKey -Name "AutoConfigURL"
   Set-StringProperty -Path $settingsKey -Name "ProxyServer" -Value $ProxyAddress
-  Set-StringProperty -Path $settingsKey -Name "ProxyOverride" -Value "<local>;localhost;127.*;[::1]"
+  Set-StringProperty -Path $settingsKey -Name "ProxyOverride" -Value ((Get-SystemProxyBypassList) -join ";")
   Set-DWordProperty -Path $settingsKey -Name "ProxyEnable" -Value 1
   Set-DWordProperty -Path $settingsKey -Name "AutoDetect" -Value 0
   Invoke-InternetSettingsRefresh
   Write-Host "System manual proxy enabled: $ProxyAddress"
+  Write-Host "LAN/private IP ranges are bypassed, but non-linux.do web traffic may still use Demergi."
+  Write-Host "For normal use, prefer PAC mode: .\start-demergi-windows.ps1 -UseSystemPac -Restart"
   Write-Host "Ordinary Chrome should now use Demergi. If it does not, restart Chrome."
 } elseif ($UseSystemPac) {
   Save-ProxySettings -BackupPath $backupPath -KeyPath $settingsKey
   $pacUri = ([System.Uri]((Resolve-Path -LiteralPath $PacPath).Path)).AbsoluteUri
+  Remove-PropertyIfExists -Path $settingsKey -Name "ProxyServer"
+  Remove-PropertyIfExists -Path $settingsKey -Name "ProxyOverride"
   Set-StringProperty -Path $settingsKey -Name "AutoConfigURL" -Value $pacUri
   Set-DWordProperty -Path $settingsKey -Name "ProxyEnable" -Value 0
   Set-DWordProperty -Path $settingsKey -Name "AutoDetect" -Value 0
   Invoke-InternetSettingsRefresh
   Write-Host "System PAC enabled: $pacUri"
+  Write-Host "Only linux.do/idcflare domains are routed to Demergi; other traffic stays DIRECT."
 } else {
   Write-Host "System proxy settings were not changed."
   Write-Host "Open linux.do with: .\open-demergi-chrome.ps1"

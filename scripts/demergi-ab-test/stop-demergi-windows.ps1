@@ -56,7 +56,9 @@ function Restore-ProxySettings {
   }
 
   Invoke-InternetSettingsRefresh
+  Remove-Item -LiteralPath $BackupPath -Force -ErrorAction SilentlyContinue
   Write-Host "System proxy settings restored."
+  Write-Host "Proxy settings backup cleared."
 }
 
 $stateDir = Get-StateDir

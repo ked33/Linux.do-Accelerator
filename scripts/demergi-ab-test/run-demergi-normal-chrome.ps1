@@ -25,7 +25,7 @@ $startArgs = @{
   ClientHelloSize = $ClientHelloSize
   ClientHelloTLSv = $ClientHelloTLSv
   LogLevel = $LogLevel
-  UseSystemProxy = $true
+  UseSystemPac = $true
   Restart = $true
 }
 
@@ -33,6 +33,7 @@ if ($DryRun) {
   Write-Host "Dry run only."
   Write-Host "Start script: $startScript"
   Write-Host "Proxy: $ProxyAddress"
+  Write-Host "Windows proxy mode: PAC, only linux.do/idcflare domains use Demergi"
   Write-Host "DNS mode: $DnsMode"
   Write-Host "DoH URL: $DohUrl"
   Write-Host "ClientHello size: $ClientHelloSize"
@@ -42,5 +43,6 @@ if ($DryRun) {
 }
 
 & $startScript @startArgs
-Write-Host "Windows manual proxy is enabled for the current user."
+Write-Host "Windows PAC proxy is enabled for the current user."
+Write-Host "Only linux.do/idcflare domains are routed to Demergi; other sites stay DIRECT."
 Write-Host "Open https://linux.do/ manually in ordinary Chrome. Restart Chrome if it still uses the old proxy state."

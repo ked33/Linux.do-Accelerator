@@ -67,12 +67,28 @@ function Test-TcpPort {
   }
 }
 
+function Get-ChromeProxyBypassList {
+  $private172 = 16..31 | ForEach-Object { "172.$_.*" }
+  @(
+    "<local>",
+    "localhost",
+    "127.*",
+    "[::1]",
+    "10.*",
+    $private172,
+    "192.168.*",
+    "169.254.*"
+  ) | ForEach-Object { $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+}
+
 $chrome = Resolve-ChromePath -RequestedPath $ChromePath
 $endpoint = Get-ProxyEndpoint -Address $ProxyAddress
+$proxyBypassList = (Get-ChromeProxyBypassList) -join ";"
 
 $args = @(
   "--user-data-dir=$ProfilePath",
   "--proxy-server=http://$ProxyAddress",
+  "--proxy-bypass-list=$proxyBypassList",
   "--disable-quic",
   "--disable-background-networking",
   "--disable-sync",
@@ -87,6 +103,7 @@ if ($DryRun) {
   Write-Host "Chrome: $chrome"
   Write-Host "Profile: $ProfilePath"
   Write-Host "Proxy: $ProxyAddress"
+  Write-Host "Proxy bypass list: $proxyBypassList"
   Write-Host "URL: $Url"
   Write-Host "Arguments:"
   $args | ForEach-Object { Write-Host "  $_" }
