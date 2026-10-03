@@ -22,6 +22,7 @@ jobs:
   windows-x64:
     runs-on: windows-latest
     name: Build Windows x64 Demergi package
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +36,18 @@ jobs:
         run: |
           rm -rf .demergi-work
           mkdir -p .demergi-work
-          tar -xzf scripts/linux_do_stable_full.tar.gz -C .demergi-work
+          tar --exclude='*/node_modules' -xzf scripts/linux_do_stable_full.tar.gz -C .demergi-work
+
+      - name: Apply connection cleanup fix
+        shell: bash
+        run: |
+          git apply --check --directory=.demergi-work/linux_do_proxy/demergi scripts/demergi-ab-test/patches/socket-cleanup.patch
+          git apply --directory=.demergi-work/linux_do_proxy/demergi scripts/demergi-ab-test/patches/socket-cleanup.patch
+
+      - name: Test connection cleanup and CONNECT relay
+        shell: bash
+        timeout-minutes: 2
+        run: node --test scripts/demergi-ab-test/tests/socket-cleanup.test.mjs
 
       - name: Build Demergi Windows binary
         shell: pwsh
@@ -44,8 +56,11 @@ jobs:
           $demergiDir = Join-Path $PWD ".demergi-work\linux_do_proxy\demergi"
           Push-Location $demergiDir
           npm install --no-audit --no-fund --package-lock=false
+          if ($LASTEXITCODE -ne 0) { throw "Failed to install dependencies." }
           npm run build:bundle
+          if ($LASTEXITCODE -ne 0) { throw "Failed to bundle Demergi." }
           npx --no-install pkg --target node20-win-x64 --out-path ./dist/ ./dist/demergi.js
+          if ($LASTEXITCODE -ne 0) { throw "Failed to package Demergi." }
           Pop-Location
           Get-ChildItem -Path (Join-Path $demergiDir "dist") -Force
 

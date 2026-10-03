@@ -187,6 +187,20 @@ Demergi 默认会对 HTTPS CONNECT 流量做 ClientHello 分片，默认分片�
 .\run-demergi-chrome.ps1 -ClientHelloSize 40
 ```
 
+## 连接取消与超时清理
+
+Windows 构建会先对压缩包中的 Demergi 源码应用 `scripts/demergi-ab-test/patches/socket-cleanup.patch`，再执行连接测试和打包。补丁无法匹配源码或测试失败时，构建会停止。
+
+修正内容：
+
+- 客户端断开或代理停止时，立即销毁仍在 DNS 解析或连接中的上游 socket，不再等待 `connect` 事件。
+- 空闲超时直接销毁两端 socket，由实际 `close` 事件清理连接集合，避免把尚未关闭的连接提前移出管理。
+- 保留现有 DNS、ClientHello 分片和系统代理行为。
+
+回归测试使用本机临时端口和受控 DNS，不连接外部网站，覆盖请求取消、空闲超时、代理停止、延迟 DNS 回答和正常 CONNECT 双向转发。Actions 使用与打包目标一致的 Node.js 20 执行测试。
+
+该修正解决了已复现的连接残留缺陷。对于“结束 Demergi 后 mihomo CPU 恢复”的现象，仍需用新包复测，不能仅凭这些连接测试认定所有高 CPU 问题均已解决。
+
 ## 注意事项
 
 - 不要同时运行原 Linux.do Accelerator 的 GUI/CLI 代理核心和 Demergi 测试包，否则 CPU 和连通性判断会互相干扰。

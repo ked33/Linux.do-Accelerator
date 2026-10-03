@@ -1,0 +1,28 @@
+--- a/src/proxy.js
++++ b/src/proxy.js
+@@ -368,16 +368,15 @@
+ 
+   #socketDestroy(socket, error) {
+     if (socket && !socket.destroyed) {
+-      if (socket.connecting) {
+-        socket.on("connect", () => socket.destroy(error));
+-      } else {
+-        socket.destroy(error);
+-      }
+-    }
+-  }
+-
+-  #socketTimeoutHandler(...args) {
+-    this.#socketCloseHandler(...args);
++      // destroy() also cancels pending DNS lookups and connection attempts.
++      // Waiting for "connect" leaves abandoned sockets alive indefinitely.
++      socket.destroy(error);
++    }
++  }
++
++  #socketTimeoutHandler(socket, relatedSocket) {
++    this.#socketDestroy(socket);
++    this.#socketDestroy(relatedSocket);
+   }
+ 
+   #socketCloseHandler(socket, relatedSocket) {
